@@ -1,0 +1,11 @@
+# Зависимостей нет. PoC работает на чистой стандартной библиотеке Python 3.9+.
+#
+# Это осознанное ограничение: жюри должно запустить прогон одной командой,
+# без установки пакетов и без доступа в интернет.
+#
+# В целевой системе (docs/architecture.md, docs/ml.md) используются:
+#   anthropic            - официальный SDK Claude API вместо urllib
+#   sentence-transformers/onnxruntime - многоязычные эмбеддинги multilingual-e5
+#   qdrant-client / psycopg (pgvector) - векторное хранилище
+#   scikit-learn         - линейный классификатор поверх эмбеддингов
+#   fastapi + uvicorn    - синхронный API горячего пути
