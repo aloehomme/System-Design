@@ -175,9 +175,17 @@ def bench_hot_path(pipeline: Pipeline, tickets: List[Dict[str, Any]], runs: int 
         result = pipeline.run_hot_path(ticket)
         samples.append(result["hot_path_ms"])
     samples.sort()
+
+    def percentile(sorted_values: List[float], q: float) -> float:
+        """q-й процентиль. Индекс ограничивается диапазоном: без этого при
+        малом числе прогонов (например runs=1) выражение int(q*n)-1 давало
+        отрицательный индекс и молча возвращало максимум вместо процентиля."""
+        index = int(q * len(sorted_values)) - 1
+        return sorted_values[min(len(sorted_values) - 1, max(0, index))]
+
     p50 = statistics.median(samples)
-    p95 = samples[int(0.95 * len(samples)) - 1]
-    p99 = samples[int(0.99 * len(samples)) - 1]
+    p95 = percentile(samples, 0.95)
+    p99 = percentile(samples, 0.99)
     print("  Прогонов: %d | p50 = %.2f мс | p95 = %.2f мс | p99 = %.2f мс | max = %.2f мс"
           % (runs, p50, p95, p99, samples[-1]))
     print("  Бюджет горячего пути: %.0f мс -> %s"

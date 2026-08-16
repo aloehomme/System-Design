@@ -33,7 +33,7 @@ LLM-провайдера физически не может нарушить SLA
 ```bash
 git clone <этот репозиторий> && cd ml_design
 make demo        # или: python3 poc/run_demo.py
-make test        # 10 тестов: python3 -m unittest discover -s tests
+make test        # 14 тестов: python3 -m unittest discover -s tests
 ```
 
 Опционально — с реальной генерацией через Claude API:
@@ -130,7 +130,7 @@ poc/                       код прототипа (только станда�
   audit.py                 аудит-лог решений и проверка схемы
   textutil.py              токенизация и TF-IDF
 data/                      15 тикетов, 10 статей базы знаний, 40 примеров
-tests/test_poc.py          10 тестов на инварианты безопасности
+tests/test_poc.py          14 тестов на инварианты безопасности
 logs/decisions.jsonl       аудит-лог (создаётся при запуске)
 ```
 
