@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Dict, List, NamedTuple, Tuple
 
-from .taxonomy import CATEGORIES, CLASSIFIER_VERSION, RULE_KEYWORDS
+from .taxonomy import CATEGORIES, CLASSIFIER_VERSION, RULE_KEYWORDS, UNKNOWN_CATEGORY
 from .textutil import TfidfIndex, tokenize
 
 # Вес правил против вес kNN в итоговом балле. Сумма = 1.0.
@@ -72,6 +72,20 @@ class TopicClassifier:
         ranked = sorted(combined.items(), key=lambda pair: (-pair[1], pair[0]))
         top_category, top_score = ranked[0]
         second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+
+        # Ни одно правило не сработало и ни один размеченный пример не оказался
+        # похож: все баллы нулевые. Сортировка в этом случае вернула бы просто
+        # первую категорию по алфавиту (account_access) — и в аудит-лог попала
+        # бы тема, которую система на самом деле не определяла.
+        if top_score <= 0.0:
+            return TopicPrediction(
+                category=UNKNOWN_CATEGORY,
+                confidence=0.0,
+                margin=0.0,
+                scores={category: 0.0 for category in CATEGORIES},
+                version=CLASSIFIER_VERSION,
+            )
+
         return TopicPrediction(
             category=top_category,
             confidence=round(top_score, 4),

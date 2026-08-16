@@ -94,7 +94,10 @@ class Pipeline:
     def run_cold_path(self, hot: Dict[str, Any]) -> Dict[str, Any]:
         decision = hot["decision"]
         kb_hits: List[Any] = hot["kb_hits"]
-        best_kb = kb_hits[0] if kb_hits else None
+        # Для автоответа берём именно ту статью, которую выбрал policy engine
+        # (с проверкой соответствия теме), а не просто верхнюю по близости.
+        # Для черновика оператору верхняя статья годится как контекст.
+        best_kb = decision.kb_for_answer or (kb_hits[0] if kb_hits else None)
 
         if not decision.allow_llm_draft:
             return {
@@ -154,7 +157,11 @@ class Pipeline:
 
         record = {
             "ticket_id": ticket["id"],
-            "decided_at": datetime.datetime.utcnow().isoformat() + "Z",
+            # datetime.utcnow() объявлен устаревшим начиная с Python 3.12
+            # и печатает DeprecationWarning прямо в вывод демо. Явное указание
+            # часового пояса работает одинаково на 3.9 и на 3.12+.
+            "decided_at": datetime.datetime.now(
+                datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "channel": ticket.get("channel", "unknown"),
             "customer_tier": ticket.get("customer_tier", "standard"),
             "masked_text": hot["masked"]["text"],

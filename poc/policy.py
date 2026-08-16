@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from typing import List, NamedTuple
+from typing import List, NamedTuple, Optional
 
 from .retrieval import KbHit
 from .risk import RiskAssessment
@@ -39,11 +39,35 @@ class Decision(NamedTuple):
     reasons: List[str]
     allow_llm_draft: bool  # можно ли вообще звать LLM для этого тикета
     version: str
+    # Статья базы знаний, на которой строится ответ. Для автоответа её выбирает
+    # policy engine (с проверкой соответствия теме), а не «первая попавшаяся».
+    kb_for_answer: Optional[KbHit] = None
+
+
+def pick_article_for_auto_answer(topic: TopicPrediction, kb_hits: List[KbHit]) -> Optional[KbHit]:
+    """Выбрать статью, на основании которой можно дать автоответ.
+
+    Статья обязана удовлетворять трём условиям одновременно:
+      1) относиться к ТОЙ ЖЕ категории, что предсказал классификатор;
+      2) быть помеченной как разрешённая для автоответа;
+      3) иметь близость не ниже порога.
+
+    Пункт 1 критичен: без него тикет с темой «статус доставки» мог получить
+    автоответ по статье о таблице размеров — обе статьи разрешены для
+    автоответа, и проверка только по флагу пропускала такой случай.
+    """
+    for hit in kb_hits:
+        if (hit.category == topic.category
+                and hit.auto_answer_allowed
+                and hit.score >= KB_MIN_SCORE):
+            return hit
+    return None
 
 
 def decide(topic: TopicPrediction, risk: RiskAssessment, kb_hits: List[KbHit]) -> Decision:
     reasons: List[str] = []
     best_kb = kb_hits[0] if kb_hits else None
+    article = pick_article_for_auto_answer(topic, kb_hits)
 
     # П-1. Prompt injection: тикет карантинится, LLM не вызывается вообще.
     if "prompt_injection" in risk.flags:
@@ -123,16 +147,14 @@ def decide(topic: TopicPrediction, risk: RiskAssessment, kb_hits: List[KbHit]) -
         and risk.level == "low"
         and topic.confidence >= CONFIDENCE_AUTO
         and topic.margin >= MARGIN_AUTO
-        and best_kb is not None
-        and best_kb.score >= KB_MIN_SCORE
-        and best_kb.auto_answer_allowed
+        and article is not None
     )
     if auto_ready:
         reasons.append(
             "Уверенность %.2f >= %.2f, отрыв %.2f >= %.2f, риск low, "
-            "статья %s (близость %.2f) разрешена для автоответа"
+            "статья %s той же категории «%s» (близость %.2f) разрешена для автоответа"
             % (topic.confidence, CONFIDENCE_AUTO, topic.margin, MARGIN_AUTO,
-               best_kb.doc_id, best_kb.score)
+               article.doc_id, article.category, article.score)
         )
         return Decision(
             action="auto_answer",
@@ -142,6 +164,7 @@ def decide(topic: TopicPrediction, risk: RiskAssessment, kb_hits: List[KbHit]) -
             reasons=reasons,
             allow_llm_draft=True,
             version=POLICY_VERSION,
+            kb_for_answer=article,
         )
 
     # П-7. Всё остальное: черновик оператору с объяснением, чего не хватило.
@@ -155,8 +178,15 @@ def decide(topic: TopicPrediction, risk: RiskAssessment, kb_hits: List[KbHit]) -
                        % (topic.margin, MARGIN_AUTO))
     if best_kb is None or best_kb.score < KB_MIN_SCORE:
         reasons.append("Не найдена достаточно релевантная статья базы знаний")
-    elif not best_kb.auto_answer_allowed:
-        reasons.append("Статья %s помечена как запрещённая для автоответа" % best_kb.doc_id)
+    elif article is None:
+        if not best_kb.auto_answer_allowed:
+            reasons.append("Статья %s помечена как запрещённая для автоответа" % best_kb.doc_id)
+        else:
+            reasons.append(
+                "Ближайшая статья %s относится к категории «%s», а тема тикета — «%s»: "
+                "отвечать по статье из другой темы нельзя"
+                % (best_kb.doc_id, best_kb.category, topic.category)
+            )
     if risk.level == "medium":
         reasons.extend(risk.reasons)
 

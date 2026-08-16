@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import sys
@@ -97,6 +98,78 @@ class TestPoc(unittest.TestCase):
         with open(self.pipeline.audit.path, "r", encoding="utf-8") as handle:
             for line in handle:
                 json.loads(line)  # каждая строка обязана быть валидным JSON
+
+    def test_auto_answer_uses_article_of_the_same_topic(self):
+        """Автоответ не даётся по статье из другой категории.
+
+        Регресс: тикет с темой delivery_status получал автоответ по статье
+        KB-03 (таблица размеров), потому что проверялся только флаг
+        auto_answer_allowed, но не соответствие категории.
+        """
+        from poc.policy import decide, pick_article_for_auto_answer
+        from poc.risk import assess_risk
+
+        text = ("трек не отслеживается. таблица размеров Nike US 42 "
+                "российский 41 обувь одежда производитель")
+        topic = self.pipeline.classifier.predict(text)
+        hits = self.pipeline.kb.search(text, top_k=3)
+        self.assertNotEqual(hits[0].category, topic.category,
+                            "тест бессмысленен, если топ-статья и так совпадает с темой")
+        decision = decide(topic, assess_risk(text, topic.category, "standard", False), hits)
+        if decision.action == "auto_answer":
+            self.assertIsNotNone(decision.kb_for_answer)
+            self.assertEqual(decision.kb_for_answer.category, topic.category)
+
+        # Инвариант шире одного случая: по всему датасету статья для автоответа
+        # всегда либо отсутствует, либо совпадает с темой по категории.
+        for ticket in self.tickets.values():
+            hot = self.pipeline.run_hot_path(ticket)
+            article = pick_article_for_auto_answer(hot["topic"], hot["kb_hits"])
+            if article is not None:
+                self.assertEqual(article.category, hot["topic"].category)
+
+    def test_unknown_topic_when_no_signal(self):
+        """Пустой или бессмысленный текст не получает конкретную тему.
+
+        Регресс: при нулевых баллах сортировка возвращала первую категорию
+        по алфавиту (account_access), и в аудит-лог попадала тема, которую
+        система не определяла.
+        """
+        for text in ["", "   ", "!!!???", "это как что для или"]:
+            prediction = self.pipeline.classifier.predict(text)
+            self.assertEqual(prediction.category, "unknown", "текст: %r" % text)
+            self.assertEqual(prediction.confidence, 0.0)
+
+        ticket = dict(id="ADV-EMPTY", channel="chat", customer_tier="standard",
+                      has_prior_contact=False, text="   ")
+        result = self.pipeline.process(ticket)
+        self.assertEqual(result["audit"]["topic"], "unknown")
+        self.assertEqual(result["effective_action"], "route_to_queue")
+
+    def test_pii_masking_edge_formats(self):
+        """Маскирование не пропускает международные номера и не склеивает слова."""
+        masked = mask_pii("международный +1 415 555 2671 номер")
+        self.assertIn("PHONE", masked["pii_found"])
+        self.assertNotIn("415", masked["text"])
+
+        masked = mask_pii("карта 4276 3800 1234 5678 рядом")
+        self.assertIn("[CARD] рядом", masked["text"],
+                      "разделитель после номера карты не должен съедаться")
+
+        masked = mask_pii("почта a.b@example.co.uk тут")
+        self.assertNotIn("uk", masked["text"], "домен должен маскироваться целиком")
+
+        # Номера заказов и суммы не должны приниматься за персональные данные
+        for safe in ["заказ 88213 без пии", "сумма 12345 рублей", "срок 3-7 дней"]:
+            self.assertEqual(mask_pii(safe)["pii_found"], [], "ложное срабатывание: %r" % safe)
+
+    def test_audit_timestamp_is_timezone_aware(self):
+        """Метка времени решения не использует устаревший utcnow()."""
+        record = self.pipeline.process(self.tickets["T-1001"])["audit"]
+        self.assertTrue(record["decided_at"].endswith("Z"))
+        cleaned = record["decided_at"].replace("Z", "+00:00")
+        parsed = datetime.datetime.fromisoformat(cleaned)
+        self.assertIsNotNone(parsed.tzinfo, "метка времени должна нести часовой пояс")
 
     def test_hot_path_within_slo(self):
         """Горячий путь укладывается в бюджет для всех тикетов датасета."""
